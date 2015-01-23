@@ -111,10 +111,14 @@ def paint_directory(screen, directory, show_dirs=True, show_hidden=False):
             screen.add_line(file_)
 
 
+def get_needed_digits(file_buffer):
+    return len(str(len(file_buffer)))
+
+
 def next_number_generator(file_buffer, total_digits=None):
     total_files = len(file_buffer)
     if not total_digits:
-        total_digits = len(str(total_files))
+        total_digits = get_needed_digits(file_buffer)
     for number in range(1, total_files+1):
         # Probably a prettier way to do this...
         yield ('{:0' + str(total_digits) + '}').format(number)
@@ -131,11 +135,13 @@ def main(stdscr):
     curses.curs_set(0)
 
     # curses.newpad(lines, columns)  # TODO: figure this out!
+    file_list = os.listdir(os.getcwd())
     paint_directory(screen, os.getcwd(), show_dirs=False, show_hidden=False)
     screen.move(0)
     # textbox = Textbox(screen.screen)
 
-    next_number = next_number_generator(screen.screen_buffer, total_digits=2)
+    needed_digits = get_needed_digits(screen.screen_buffer)
+    next_number = next_number_generator(screen.screen_buffer, needed_digits)
     while True:
         c = stdscr.getch()
         if c == ord('q'):
@@ -148,6 +154,14 @@ def main(stdscr):
                 screen.move_down()
         elif c == ord(' '):
             screen.replace_line_text('{}_{}'.format(next_number.next(), screen.get_line_text()))
+        elif c == ord('s'):
+            for new_name in screen.screen_buffer:
+                original_name = new_name[needed_digits+1:]
+                if original_name in file_list:
+                    os.rename(original_name, new_name)
+                else:
+                    raise Exception("Didn't find original file for {}".format(new_name))
+            break
         # elif c == curses.KEY_NPAGE:
         #     screen.screen.scroll(1)
         # elif c == curses.KEY_PPAGE:
