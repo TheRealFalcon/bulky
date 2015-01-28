@@ -3,14 +3,18 @@
 import curses
 import os
 
+MAX_FILENAME_LENGTH = os.pathconf('.', 'PC_NAME_MAX')
+
 
 def debug(text):
     with open('/tmp/fileStuff.log', 'a') as f:
         f.write(str(text) + '\n')
 
+
 class Colors(object):
     WHITE_ON_BLACK = 1
     WHITE_ON_BLUE = 2
+
 
 class TextScreen(object):
     def __init__(self, screen):
@@ -18,51 +22,44 @@ class TextScreen(object):
         self.screen.idlok(1)
         self.screen.scrollok(True)
         self.max_y, self.max_x = self.screen.getmaxyx()
-        self.screen_buffer = []
         self.reset_screen()
 
     def add_line(self, text):
-        self.draw_line(text)
-        self.screen_buffer.append(text)
-
-    def draw_line(self, text):
-        self.cursor_y += 1
-        self.text_height += 1
-        self.screen.move(self.cursor_y, 0)
-        self.screen.addstr(text)
-        self.screen.move(self.cursor_y, 0)
+        if self.cursor_y+1 < self.max_y:
+            self.cursor_y += 1
+            self.text_height += 1
+            self.screen.move(self.cursor_y, 0)
+            self.screen.addstr(text)
+            self.screen.move(self.cursor_y, 0)
+        else:
+            raise Exception("No more lines left!")
 
     def replace_line_text(self, newText):
-        selected_line = self.cursor_y
-        self.screen_buffer[self.cursor_y] = newText
-        self.draw_screen_from_buffer()
-        self.move(selected_line)
+        self.screen.move(self.cursor_y, 0)
+        self.screen.clrtoeol()
+        self.current_buffer[self.cursor_y] = newText
+        self.screen.attron(curses.color_pair(Colors.WHITE_ON_BLUE))  # Current line was already selected
+        self.screen.addstr(newText)
+        self.screen.attron(curses.color_pair(Colors.WHITE_ON_BLACK))
 
     def get_line_text(self):
         text = self.screen.instr().strip()
         return text
 
-    def draw_screen_from_buffer(self):
+    def draw_screen(self, buffer):
         self.reset_screen()
-        for line in self.screen_buffer:
-            self.draw_line(line)
+        self.current_buffer = buffer
+        for line in buffer:
+            if not self.cursor_y == self.max_y:
+                self.add_line(line)
 
-
-    # def move_left(self):
-    #     self.cursor_x -= 1
-    #     self.screen.move(self.cursor_y, self.cursor_x)
-    #
-    # def move_right(self):
-    #     self.cursor_x += 1
-    #     self.screen.move(self.cursor_y, self.cursor_x)
-
-    def move(self, to_y):
+    def select_line(self, to_y):
         # First deselect the current text
         from_y, _ = self.screen.getyx()
         self.screen.move(from_y, 0)
         self.screen.clrtoeol()
         self.screen.attron(curses.color_pair(Colors.WHITE_ON_BLACK))
-        self.screen.addstr(self.screen_buffer[from_y])
+        self.screen.addstr(self.current_buffer[from_y])
 
         # Set what our new line should be
         self.cursor_y = to_y
@@ -70,7 +67,7 @@ class TextScreen(object):
         # Now select current line
         self.screen.move(to_y, 0)
         self.screen.attron(curses.color_pair(Colors.WHITE_ON_BLUE))
-        self.screen.addstr(self.screen_buffer[to_y])
+        self.screen.addstr(self.current_buffer[to_y])
         self.screen.move(to_y, 0)
 
         # Set the color back for the next time we draw
@@ -79,12 +76,13 @@ class TextScreen(object):
         self.screen.refresh()
 
     def move_up(self):
-        self.move(self.cursor_y - 1)
+        self.select_line(self.cursor_y - 1)
 
     def move_down(self):
-        self.move(self.cursor_y + 1)
+        self.select_line(self.cursor_y + 1)
 
     def reset_screen(self):
+        self.current_buffer = []
         self.screen.erase()
         self.cursor_y = -1
         self.cursor_x = 0
@@ -93,22 +91,28 @@ class TextScreen(object):
         self.screen.refresh()
 
 
-def paint_directory(screen, directory, show_dirs=True, show_hidden=False):
-    screen.reset_screen()
-    walker = os.walk(directory)
-    current_dir, subdirs, files = walker.next()
-    if show_dirs:
-        if not directory == '/':
-            screen.add_line('..')
-        for dir in sorted(subdirs):
-            # TODO: unnngh...window overflow...
-            if screen.cursor_y+1 < screen.max_y:
-                screen.add_line('/{}'.format(dir))
-    for file_ in sorted(files):
-        if not show_hidden and file_.startswith('.'):
-            continue
-        if screen.cursor_y+1 < screen.max_y:
-            screen.add_line(file_)
+class FileManager(object):
+    def __init__(self, directory=os.curdir, show_dirs=True, show_hidden=False):
+        self.files = self.generate_file_list(directory, show_dirs, show_hidden)
+        self.changes = {}
+        for entry in self.files:
+            self.changes[entry] = None
+
+    def generate_file_list(self, directory, show_dirs, show_hidden):
+        walker = os.walk(directory)
+        current_dir, subdirs, files = walker.next()
+        file_list = []
+        # This is slightly awkward because we want dirs first in the list
+        if show_dirs:
+            if not directory == '/':
+                file_list.append('..')
+            for dir in sorted(subdirs):
+                if show_hidden or not dir.startswith('.'):
+                    file_list.append('/{}'.format(dir))
+        for file_ in sorted(files):
+            if show_hidden or not file_.startswith('.'):
+                file_list.append(file_)
+        return file_list
 
 
 def get_needed_digits(file_buffer):
@@ -124,24 +128,31 @@ def next_number_generator(file_buffer, total_digits=None):
         yield ('{:0' + str(total_digits) + '}').format(number)
 
 
+def create_command_bar(screen):
+    new_screen = curses.newwin(1, screen.max_x, screen.max_y-2, 0)
+    new_screen.addstr("hi")
+    new_screen.refresh()
+
 def main(stdscr):
     screen = TextScreen(stdscr)
 
-    # Setup color and cursor
+    # # Setup color and cursor
     curses.start_color()
     curses.init_pair(Colors.WHITE_ON_BLACK, curses.COLOR_WHITE, curses.COLOR_BLACK)
     curses.init_pair(Colors.WHITE_ON_BLUE, curses.COLOR_WHITE, curses.COLOR_BLUE)
     screen.screen.attron(curses.color_pair(Colors.WHITE_ON_BLACK))
     curses.curs_set(0)
 
-    # curses.newpad(lines, columns)  # TODO: figure this out!
-    file_list = os.listdir(os.getcwd())
-    paint_directory(screen, os.getcwd(), show_dirs=False, show_hidden=False)
-    screen.move(0)
+    dir = FileManager(os.getcwd(), show_dirs=False, show_hidden=False)
+    screen.draw_screen(dir.files)
+    screen.select_line(0)
+
+
+    # Textbox?
     # textbox = Textbox(screen.screen)
 
-    needed_digits = get_needed_digits(screen.screen_buffer)
-    next_number = next_number_generator(screen.screen_buffer, needed_digits)
+    needed_digits = get_needed_digits(dir.files)
+    next_number = next_number_generator(dir.files, needed_digits)
     while True:
         c = stdscr.getch()
         if c == ord('q'):
@@ -153,14 +164,15 @@ def main(stdscr):
             if screen.cursor_y < screen.text_height:
                 screen.move_down()
         elif c == ord(' '):
-            screen.replace_line_text('{}_{}'.format(next_number.next(), screen.get_line_text()))
+            old_text = screen.get_line_text()
+            new_text = '{}_{}'.format(next_number.next(), old_text)
+            dir.changes[old_text] = new_text
+            screen.replace_line_text(new_text)
         elif c == ord('s'):
-            for new_name in screen.screen_buffer:
-                original_name = new_name[needed_digits+1:]
-                if original_name in file_list:
-                    os.rename(original_name, new_name)
-                else:
-                    raise Exception("Didn't find original file for {}".format(new_name))
+            for old_name, new_name in dir.changes.items():
+                if new_name:
+                    # Just letting exceptions bubble up for now...
+                    os.rename(old_name, new_name)
             break
         # elif c == curses.KEY_NPAGE:
         #     screen.screen.scroll(1)
