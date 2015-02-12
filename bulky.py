@@ -22,10 +22,13 @@ class TextScreen(object):
         self.screen.idlok(1)
         self.screen.scrollok(True)
         self.max_y, self.max_x = self.screen.getmaxyx()
+        self.max_y -= 1
+        self.current_buffer = []
+        self.current_view = [0, self.max_y]
         self.reset_screen()
 
     def add_line(self, text):
-        if self.cursor_y+1 < self.max_y:
+        if self.cursor_y <= self.max_y:
             self.cursor_y += 1
             self.text_height += 1
             self.screen.move(self.cursor_y, 0)
@@ -46,12 +49,16 @@ class TextScreen(object):
         text = self.screen.instr().strip()
         return text
 
-    def draw_screen(self, buffer):
-        self.reset_screen()
+    def draw_buffer(self, buffer):
         self.current_buffer = buffer
-        for line in buffer:
-            if not self.cursor_y == self.max_y:
-                self.add_line(line)
+        self.current_view = [0, self.max_y]
+        self.draw_view()
+
+    def draw_view(self):
+        self.reset_screen()
+        for line in self.current_buffer[self.current_view[0]:self.current_view[1]+1]:
+            self.add_line(line)
+        self.screen.refresh()
 
     def select_line(self, to_y):
         # First deselect the current text
@@ -59,7 +66,7 @@ class TextScreen(object):
         self.screen.move(from_y, 0)
         self.screen.clrtoeol()
         self.screen.attron(curses.color_pair(Colors.WHITE_ON_BLACK))
-        self.screen.addstr(self.current_buffer[from_y])
+        self.screen.addstr(self.current_buffer[self.current_view[0]+from_y])
 
         # Set what our new line should be
         self.cursor_y = to_y
@@ -67,7 +74,7 @@ class TextScreen(object):
         # Now select current line
         self.screen.move(to_y, 0)
         self.screen.attron(curses.color_pair(Colors.WHITE_ON_BLUE))
-        self.screen.addstr(self.current_buffer[to_y])
+        self.screen.addstr(self.current_buffer[self.current_view[0]+to_y])
         self.screen.move(to_y, 0)
 
         # Set the color back for the next time we draw
@@ -76,13 +83,26 @@ class TextScreen(object):
         self.screen.refresh()
 
     def move_up(self):
-        self.select_line(self.cursor_y - 1)
+        # If we're at the top of the screen
+        if self.cursor_y > 0:
+            self.select_line(self.cursor_y - 1)
+        # If there's more buffer left above our current view
+        elif self.current_view[0] > 0:
+            self.current_view = [index-1 for index in self.current_view]
+            self.draw_view()
+            self.select_line(0)
 
     def move_down(self):
-        self.select_line(self.cursor_y + 1)
+        # If we're within the current view and within the current buffer
+        if self.cursor_y < self.max_y and self.cursor_y < len(self.current_buffer)-1:
+            self.select_line(self.cursor_y + 1)
+        # If there's more left in our current buffer that's not shown in the view
+        elif self.current_view[1] < len(self.current_buffer)-1:
+            self.current_view = [index+1 for index in self.current_view]
+            self.draw_view()
+            self.select_line(self.cursor_y)
 
     def reset_screen(self):
-        self.current_buffer = []
         self.screen.erase()
         self.cursor_y = -1
         self.cursor_x = 0
@@ -144,7 +164,7 @@ def main(stdscr):
     curses.curs_set(0)
 
     dir = FileManager(os.getcwd(), show_dirs=False, show_hidden=False)
-    screen.draw_screen(dir.files)
+    screen.draw_buffer(dir.files)
     screen.select_line(0)
 
 
@@ -158,11 +178,9 @@ def main(stdscr):
         if c == ord('q'):
             break
         elif c == curses.KEY_UP:
-            if screen.cursor_y > 0:
-                screen.move_up()
+            screen.move_up()
         elif c == curses.KEY_DOWN:
-            if screen.cursor_y < screen.text_height:
-                screen.move_down()
+            screen.move_down()
         elif c == ord(' '):
             old_text = screen.get_line_text()
             new_text = '{}_{}'.format(next_number.next(), old_text)
